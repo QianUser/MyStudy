@@ -3,5 +3,13 @@ package memory.node.filter;
 import memory.node.Node;
 
 public interface NodeFilter {
-    boolean accept(Node<?> node);
+
+    default boolean acceptNode(Node node) {
+        return true;
+    }
+
+    default boolean acceptTree(Node tree) {
+        return true;
+    }
+
 }

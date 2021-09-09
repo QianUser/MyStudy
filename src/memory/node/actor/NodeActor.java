@@ -4,10 +4,10 @@ import memory.node.Node;
 
 public interface NodeActor {
 
-    void act(Node<?> node);
+    default void forward(Node node) {}
 
-    default void postHandle(Node<?> node) {}
+    default void back(Node node) {}
 
-    default void afterComplete() {}
+    default void complete(Node node) {}
 
 }

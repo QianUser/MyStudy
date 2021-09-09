@@ -1,29 +1,31 @@
 package memory.visitor;
 
+import memory.util.Utils;
+import memory.visitor.transformer.DefaultTransformer;
+import memory.visitor.transformer.Transformer;
+
 import java.io.EOFException;
+import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 
-import static memory.util.Constant.chunkSize;
-import static memory.util.TypeUtils.toChar;
-
 public class Visitor {
-
-    public enum Mode {
-        R, RW
-    }
 
     private enum CacheState {
         N, C1, F_O, F_NO, NF_O, NF_NO
     }
 
-    private final RandomAccessFile randomAccessFile;
+    private int cacheSize;
+
+    private Transformer transformer;
+
+    private File file;
+
+    private RandomAccessFile randomAccessFile;
 
     private long length;
 
     private long position;
-
-    private int cacheSize;
 
     private byte[] cache1;
 
@@ -37,59 +39,77 @@ public class Visitor {
 
     private int index;
 
-    public Visitor(String filename, Mode mode) throws IOException {
-        this.randomAccessFile = new RandomAccessFile(filename, mode.name().toLowerCase());
-        this.length = randomAccessFile.length();
-        this.position = 0;
-        this.cacheSize = chunkSize;
-        this.cache1 = new byte[0];
-        this.cache2 = new byte[0];
-        this.dirty1 = false;
-        this.dirty2 = false;
-        this.cacheState = CacheState.N;
+    public Visitor() throws IOException {
+        this(new DefaultTransformer(), null);
     }
 
-    public long length() {
-        return length;
+    public Visitor(Transformer transformer) throws IOException {
+        this(transformer, null);
     }
 
-    public long position() {
-        return position;
+    public Visitor(File file) throws IOException {
+        this(new DefaultTransformer(), file);
     }
 
-    public boolean eofChar() {
-        return position + 1 >= length;
+    public Visitor(Transformer transformer, File file) throws IOException {
+        this.file = file;
+        this.transformer = transformer;
     }
 
-    public boolean eof() {
-        return position >= length;
-    }
-
-    public boolean eofChar(long distance) {
-        return position + 2 * distance + 1 >= length || position + 2 * distance < 0;
-    }
-
-    public boolean eof(long distance) {
-        return position + distance >= length || position + distance < 0;
-    }
-
-    public int cacheSize() {
+    public int getCacheSize() {
         return cacheSize;
     }
 
-    public void cacheSize(int cacheSize) {
+    public void setCacheSize(int cacheSize) {
         if (cacheSize <= 0) {
-            throw new RuntimeException("缓存大小必须大于0");
+            throw new RuntimeException("缓存大小：" + cacheSize + "小于等于0");
         }
+        transformer.checkCacheSize(cacheSize);
         this.cacheSize = cacheSize;
     }
 
-    public void forwardChar() throws IOException {
-        forward(2);
+    public Transformer getTransformer() {
+        return transformer;
     }
 
-    public void forwardChar(long distance) throws IOException {
-        forward(2 * distance);
+    public void setTransformer(Transformer transformer) throws IOException {
+        reset();
+        this.transformer = transformer;
+    }
+
+    public File getFile() {
+        return file;
+    }
+
+    public void setFile(File file) throws IOException {
+        reset();
+        this.file = file;
+        this.randomAccessFile = new RandomAccessFile(file, file.exists() && !file.canWrite() ? "rw" : "r");
+        this.length = transformer.initLength(randomAccessFile);
+    }
+
+    public long getLength() {
+        return length;
+    }
+
+    public long getPosition() {
+        return position;
+    }
+
+    public boolean isEof() {
+        return position >= length;
+    }
+
+    public boolean isEof(long distance) {
+        return position + distance >= length || position + distance < 0;
+    }
+
+    public boolean isEofChar() {
+        return position + 1 >= length;
+    }
+
+    public boolean isEofChar(long distance) {
+        return position + 2 * distance + 1 >= length || position + 2 * distance < 0;
     }
 
     public void forward() throws IOException {
@@ -104,9 +124,10 @@ public class Visitor {
         if (position + distance > length) {
             throw new EOFException();
         }
+        position += distance;
         switch (cacheState) {
             case N:
-                init(distance);
+                initCache();
                 break;
             case C1:
             case NF_NO:
@@ -174,15 +195,14 @@ public class Visitor {
                 }
                 break;
         }
-        position += distance;
     }
 
-    public void backChar() throws IOException {
-        back(2);
+    public void forwardChar() throws IOException {
+        forward(2);
     }
 
-    public void backChar(long distance) throws IOException {
-        back(2 * distance);
+    public void forwardChar(long distance) throws IOException {
+        forward(2 * distance);
     }
 
     public void back() throws IOException {
@@ -197,9 +217,10 @@ public class Visitor {
         if (position - distance < 0) {
             throw new EOFException();
         }
+        position -= distance;
         switch (cacheState) {
             case N:
-                init(-distance);
+                initCache();
                 break;
             case C1:
             case F_O:
@@ -265,11 +286,14 @@ public class Visitor {
                 }
                 break;
         }
-        position -= distance;
     }
 
-    public char peekChar() throws IOException {
-        return toChar(peek(), next(1));
+    public void backChar() throws IOException {
+        back(2);
+    }
+
+    public void backChar(long distance) throws IOException {
+        back(2 * distance);
     }
 
     public byte peek() throws IOException {
@@ -278,7 +302,7 @@ public class Visitor {
         }
         switch (cacheState) {
             case N:
-                init(0);
+                initCache();
                 return cache1[index];
             case C1:
             case F_O:
@@ -291,12 +315,8 @@ public class Visitor {
         throw new RuntimeException();
     }
 
-    public char nextChar() throws IOException {
-        return toChar(next(2), next(3));
-    }
-
-    public char nextChar(long distance) throws IOException {
-        return toChar(next(2 * distance), next(2 * distance + 1));
+    public char peekChar() throws IOException {
+        return Utils.toChar(peek(), next(1));
     }
 
     public byte next() throws IOException {
@@ -315,7 +335,7 @@ public class Visitor {
         }
         switch (cacheState) {
             case N:
-                init(0);
+                initCache();
                 return next(distance);
             case C1:
             case NF_NO:
@@ -366,12 +386,12 @@ public class Visitor {
         throw new RuntimeException();
     }
 
-    public char previousChar() throws IOException {
-        return toChar(previous(2), previous(1));
+    public char nextChar() throws IOException {
+        return Utils.toChar(next(2), next(3));
     }
 
-    public char previousChar(long distance) throws IOException {
-        return toChar(previous(2 * distance), previous(2 * distance - 1));
+    public char nextChar(long distance) throws IOException {
+        return Utils.toChar(next(2 * distance), next(2 * distance + 1));
     }
 
     public byte previous() throws IOException {
@@ -390,7 +410,7 @@ public class Visitor {
         }
         switch (cacheState) {
             case N:
-                init(0);
+                initCache();
                 return previous(distance);
             case C1:
             case F_O:
@@ -441,17 +461,18 @@ public class Visitor {
         throw new RuntimeException();
     }
 
-    public void writeChar(char c) throws IOException {
-        write((byte) ((c & 0xff00) >> 8));
-        forward(1);
-        write((byte) (c & 0xff));
-        back(1);
+    public char previousChar() throws IOException {
+        return Utils.toChar(previous(2), previous(1));
+    }
+
+    public char previousChar(long distance) throws IOException {
+        return Utils.toChar(previous(2 * distance), previous(2 * distance - 1));
     }
 
     public void write(byte b) throws IOException {
         switch (cacheState) {
             case N:
-                init(0);
+                initCache();
                 cache1[index] = b;
                 dirty1 = true;
                 break;
@@ -472,6 +493,17 @@ public class Visitor {
         }
     }
 
+    public void write(char c) throws IOException {
+        write((byte) ((c & 0xff00) >> 8));
+        forward(1);
+        write((byte) (c & 0xff));
+        back(1);
+    }
+
+    public void truncate() {
+        // 在position处截断（不包含position）
+    }
+
     public void flush() throws IOException {
         flush1();
         flush2();
@@ -482,10 +514,29 @@ public class Visitor {
         randomAccessFile.close();
     }
 
-    private void init(long distance) throws IOException {
-        cache1(distance);
+    private void reset() throws IOException {
+        this.file = null;
+        if (this.randomAccessFile != null) {
+            this.randomAccessFile.close();
+            this.randomAccessFile = null;
+        }
+        this.length = 0;
+        this.position = 0;
+        this.cache1 = new byte[0];
+        this.cache2 = new byte[0];
+        this.dirty1 = false;
+        this.dirty2 = false;
+        this.cacheState = CacheState.N;
+        this.index = 0;
+    }
+
+    private void initCache() throws IOException {
+        flush1();
+        if (cache1.length != cacheSize) {
+            cache1 = new byte[cacheSize];
+        }
         cacheState = CacheState.C1;
-        index = 0;
+        index = transformer.initDecode(randomAccessFile, position, length, cache1);
     }
 
     private void cache1(long distance) throws IOException {
@@ -494,13 +545,7 @@ public class Visitor {
             cache1 = new byte[cacheSize];
         }
         long start = position + distance;
-        if (start >= 0) {
-            randomAccessFile.seek(start);
-            randomAccessFile.read(cache1);
-        } else {
-            randomAccessFile.seek(0);
-            randomAccessFile.read(cache1, (int) -start, (int) (cacheSize + start));
-        }
+        transformer.decode(randomAccessFile, start, length , cache1);
     }
 
     private void cache2(long distance) throws IOException {
@@ -509,13 +554,7 @@ public class Visitor {
             cache2 = new byte[cacheSize];
         }
         long start = position + distance;
-        if (start >= 0) {
-            randomAccessFile.seek(start);
-            randomAccessFile.read(cache2);
-        } else {
-            randomAccessFile.seek(0);
-            randomAccessFile.read(cache2, (int) -start, (int) (cacheSize + start));
-        }
+        transformer.decode(randomAccessFile, start, length , cache2);
     }
 
     private void flush1() throws IOException {
@@ -538,13 +577,7 @@ public class Visitor {
                 start = position - index - cache1.length;
                 break;
         }
-        if (start >= 0) {
-            randomAccessFile.seek(start);
-            randomAccessFile.write(cache1, 0, (int) Math.min(cache1.length, length - start));
-        } else {
-            randomAccessFile.seek(0);
-            randomAccessFile.write(cache1, (int) -start, (int) Math.min(cache1.length + start, length));
-        }
+        transformer.encode(randomAccessFile, start, length, cache1);
         dirty1 = false;
     }
 
@@ -568,13 +601,7 @@ public class Visitor {
                 start = position - index - cache2.length;
                 break;
         }
-        if (start >= 0) {
-            randomAccessFile.seek(start);
-            randomAccessFile.write(cache2, 0, (int) Math.min(cache2.length, length - start));
-        } else {
-            randomAccessFile.seek(0);
-            randomAccessFile.write(cache2, (int) -start, (int) Math.min(cache2.length + start, length));
-        }
+        transformer.encode(randomAccessFile, start, length, cache2);
         dirty2 = false;
     }
 

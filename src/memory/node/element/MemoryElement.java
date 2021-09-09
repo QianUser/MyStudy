@@ -1,35 +1,51 @@
 package memory.node.element;
 
-import java.io.Serializable;
+import memory.visitor.Visitor;
 
-public class MemoryElement implements Comparable<MemoryElement>, Serializable {
+import java.io.IOException;
+import java.security.MessageDigest;
 
-    private String filename;
-    private String name;
+public class MemoryElement implements ElementWrapper {
+
+    private static final int chunkSize = 16777216;
+
+    private final Visitor reader;
+
+    private Element element;
+
     private long start;
+
     private long length;
 
-    public MemoryElement(String filename, String name, long start, long length) {
-        this.filename = filename;
-        this.name = name;
+    public MemoryElement(Visitor reader, Element element, long start) {
+        this(reader, element, start, element.length());
+    }
+
+    public MemoryElement(Visitor reader, Element element, long start, long length) {
+        this.reader = reader;
+        this.element = element;
         this.start = start;
         this.length = length;
     }
 
-    public String getFilename() {
-        return filename;
+    public Visitor getReader() {
+        return reader;
     }
 
-    public void setFilename(String filename) {
-        this.filename = filename;
+    @Override
+    public Element getElement() {
+        return element;
     }
 
-    public String getName() {
-        return name;
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T extends Element> T getElement(Class<T> clazz) {
+        return (T) element;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    @Override
+    public void setElement(Element element) {
+        this.element = element;
     }
 
     public long getStart() {
@@ -49,14 +65,43 @@ public class MemoryElement implements Comparable<MemoryElement>, Serializable {
     }
 
     @Override
-    public int compareTo(MemoryElement o) {
-        return Long.compare(start, o.start);
+    public long length() {
+        return length;
+    }
+
+    @Override
+    public void write(Visitor writer) throws IOException {
+        reader.forward(start - reader.getPosition());
+        for (long i = 0; i < length; ++i) {
+            writer.write(reader.peek());
+            reader.forward();
+            writer.forward();
+        }
+        writer.flush();
+    }
+
+    @Override
+    public void updateChecksum(MessageDigest messageDigest) {
+        byte[] bytes = new byte[(int) Math.min(chunkSize, length)];
+        try {
+            reader.forward(start - reader.getPosition());
+            long length = this.length;
+            while (length > 0) {
+                int n = (int) Math.min(chunkSize, length);
+                for (int i = 0; i < n; ++i) {
+                    bytes[i] = reader.peek();
+                    reader.forward();
+                }
+                messageDigest.update(bytes, 0, n);
+                length -= n;
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
     public String toString() {
-        String newName = name.length() == 0 ? "<未命名>" : name;
-        return "[" + newName + ", (" + start + ", " + length + ")]";
+        return "[" + element + "(" + start + ", " + length + ")]";
     }
-
 }

@@ -1,98 +1,148 @@
 package memory.node;
 
 import memory.node.actor.NodeActor;
-import memory.node.element.MemoryElement;
+import memory.node.element.Element;
+import memory.node.element.ElementWrapper;
 import memory.node.filter.NodeFilter;
-import memory.node.sorter.NodeSorter;
-import memory.visitor.Visitor;
+import memory.node.getter.NodeGetter;
+import memory.node.iterator.NodeIterator;
 
-import java.io.*;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 
-import static memory.util.Constant.chunkSize;
-import static memory.util.TypeUtils.toBytes;
+public class Node {
 
-public class Node<T> implements Serializable {
+    private static class Root {
+        private Node root;
+    }
 
-    private static final long serialVersionUID = 8231678188433287822L;
+    private Element element;
+    private final Root root;
 
-    protected T element;
+    private Node parent;
+    private Node firstChild;
+    private Node lastChild;
+    private Node prevSibling;
+    private Node nextSibling;
 
-    private Node<?> parent;
-    private Node<?> firstChild;
-    private Node<?> prevSibling;
-    private Node<?> nextSibling;
-    private Node<?> lastChild;
-
-    public Node(T element) {
+    public Node(Element element) {
         this.element = element;
+        this.root = new Root();
+        this.root.root = this;
     }
 
-    public Node<?> getParent() {
-        return parent;
-    }
-
-    public void setParent(Node<?> parent) {
-        this.parent = parent;
-    }
-
-    public T getElement() {
+    public Element getElement() {
         return element;
     }
 
-    public void setElement(T element) {
+    @SuppressWarnings("unchecked")
+    public <T extends Element> T getElement(Class<T> clazz) {
+        return (T) element;
+    }
+
+    public Element getUnwrapped() {
+        if (element instanceof ElementWrapper) {
+            return ((ElementWrapper) element).getElement();
+        } else {
+            return element;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T extends Element> T getUnwrapped(Class<T> clazz) {
+        if (element instanceof ElementWrapper) {
+            return ((ElementWrapper) element).getElement(clazz);
+        } else {
+            return (T) element;
+        }
+    }
+
+    public void setElement(Element element) {
         this.element = element;
     }
 
-    public Node<?> getFirstChild() {
+    public void setUnwrapped(Element element) {
+        if (element instanceof ElementWrapper) {
+            ((ElementWrapper) element).setElement(element);
+        } else {
+            this.element = element;
+        }
+    }
+
+    public Node getParent() {
+        return parent;
+    }
+
+    public Node getFirstChild() {
         return firstChild;
     }
 
-    public void setFirstChild(Node<?> firstChild) {
-        this.firstChild = firstChild;
+    public void setFirstChild(Element element) {
+        setFirstChild(new Node(element));
     }
 
-    public Node<?> getPrevSibling() {
-        return prevSibling;
+    public void setFirstChild(Node node) {
+        if (node.parent != null) {
+            throw new RuntimeException("不允许插入非根节点");
+        }
+        if (root == node.root) {
+            throw new RuntimeException("不允许插入同源节点");
+        }
+        node.parent = this;
+        node.prevSibling = null;
+        node.nextSibling = firstChild;
+        if (firstChild == null) {
+            lastChild = node;
+        } else {
+            firstChild.prevSibling = node;
+        }
+        firstChild = node;
+        node.root.root = root.root;
     }
 
-    public void setPrevSibling(Node<?> prevSibling) {
-        this.prevSibling = prevSibling;
-    }
-
-    public Node<?> getNextSibling() {
-        return nextSibling;
-    }
-
-    public void setNextSibling(Node<?> nextSibling) {
-        this.nextSibling = nextSibling;
-    }
-
-    public Node<?> getLastChild() {
+    public Node getLastChild() {
         return lastChild;
     }
 
-    public void setLastChild(Node<?> lastChild) {
-        this.lastChild = lastChild;
+    public void setLastChild(Element element) {
+        setLastChild(new Node(element));
     }
 
-    public Node<?> getChild(int n) {
-        if (n <= 0) {
-            throw new RuntimeException();
+    public void setLastChild(Node node) {
+        if (node.parent != null) {
+            throw new RuntimeException("不允许插入非根节点");
         }
-        Node<?> child = firstChild;
-        for (int i = 2; i <= n; ++i) {
+        if (root == node.root) {
+            throw new RuntimeException("不允许插入同源节点");
+        }
+        node.parent = this;
+        node.prevSibling = lastChild;
+        node.nextSibling = null;
+        if (lastChild == null) {
+            firstChild = node;
+        } else {
+            lastChild.nextSibling = node;
+        }
+        lastChild = node;
+        node.root.root = root.root;
+    }
+
+    public Node getChild(int n) {
+        if (n < 0) {
+            return null;
+        }
+        Node child = firstChild;
+        while (child != null && n > 0) {
             child = child.nextSibling;
+            --n;
         }
         return child;
     }
 
-    public Node<?> getChild(NodeFilter nodeFilter) {
-        Node<?> child = firstChild;
+    public Node getChild(NodeFilter nodeFilter) {
+        Node child = firstChild;
         while (child != null) {
-            if (nodeFilter.accept(child)) {
+            if (nodeFilter.acceptNode(child)) {
                 return child;
             }
             child = child.nextSibling;
@@ -100,15 +150,16 @@ public class Node<T> implements Serializable {
         return null;
     }
 
-    public List<Node<?>> getChildren() {
-        return getChildren(i -> true);
+    public List<Node> getChildren() {
+        return getChildren(new NodeFilter() {
+        });
     }
 
-    public List<Node<?>> getChildren(NodeFilter nodeFilter) {
-        List<Node<?>> nodes = new ArrayList<>();
-        Node<?> child = firstChild;
+    public List<Node> getChildren(NodeFilter nodeFilter) {
+        List<Node> nodes = new ArrayList<>();
+        Node child = firstChild;
         while (child != null) {
-            if (nodeFilter.accept(child)) {
+            if (nodeFilter.acceptNode(child)) {
                 nodes.add(child);
             }
             child = child.nextSibling;
@@ -116,266 +167,230 @@ public class Node<T> implements Serializable {
         return nodes;
     }
 
-    public Node<?> getSibling(NodeFilter nodeFilter) {
+    public Node getPrevSibling() {
+        return prevSibling;
+    }
+
+    public void setPrevSibling(Element element) {
+        setPrevSibling(new Node(element));
+    }
+
+    public void setPrevSibling(Node node) {
+        if (node.parent != null) {
+            throw new RuntimeException("不允许插入非根节点");
+        }
+        if (root == node.root) {
+            throw new RuntimeException("不允许插入同源节点");
+        }
         if (parent == null) {
-            if (nodeFilter.accept(this)) {
-                return this;
-            }
-        } else {
-            Node<?> child = parent.firstChild;
-            while (child != null) {
-                if (nodeFilter.accept(child)) {
-                    return child;
-                }
-                child = child.nextSibling;
-            }
-        }
-        return null;
-    }
-
-    public Node<?> getOtherSibling(NodeFilter nodeFilter) {
-        return getSibling(node -> node != this && nodeFilter.accept(node));
-    }
-
-    public List<Node<?>> getSiblings() {
-        return getSiblings(i -> true);
-    }
-
-    public List<Node<?>> getSiblings(NodeFilter nodeFilter) {
-        List<Node<?>> nodes = new ArrayList<>();
-        if (parent == null) {
-            if (nodeFilter.accept(this)) {
-                nodes.add(this);
-            }
-        } else {
-            Node<?> child = parent.firstChild;
-            while (child != null) {
-                if (nodeFilter.accept(child)) {
-                    nodes.add(child);
-                }
-                child = child.nextSibling;
-            }
-        }
-        return nodes;
-    }
-
-    public List<Node<?>> getOtherSiblings() {
-        return getSiblings(node -> node != this);
-    }
-
-    public List<Node<?>> getOtherSiblings(NodeFilter nodeFilter) {
-        return getSiblings(node -> node != this && nodeFilter.accept(node));
-    }
-
-    public int getDepth() {
-        Node<?> node = this;
-        int cnt = 0;
-        while ((node = node.parent) != null) {
-            ++cnt;
-        }
-        return cnt;
-    }
-
-    public boolean isLeaf() {
-        return firstChild == null;
-    }
-
-    public Node<?> insertAsLastChild(Node<?> node) {
-        if (lastChild != null) {
-            lastChild.nextSibling = node;
-            node.prevSibling = lastChild;
-        } else {
-            firstChild = node;
-        }
-        lastChild = node;
-        lastChild.parent = this;
-        return node;
-    }
-
-    public Node<?> insertAsFirstChild(Node<?> node) {
-        if (firstChild != null) {
-            firstChild.prevSibling = node;
-            node.nextSibling = firstChild;
-        } else {
-            lastChild = node;
-        }
-        firstChild = node;
-        firstChild.parent = this;
-        return node;
-    }
-
-    public Node<?> insertAsNextSibling(Node<?> node) {
-        this.nextSibling = node;
-        node.prevSibling = this;
-        if (this == parent.lastChild) {
-            parent.lastChild = node;
+            throw new RuntimeException("不允许插入根节点的兄弟节点");
         }
         node.parent = parent;
-        return node;
-    }
-
-    public Node<?> insertAsPrevSibling(Node<?> node) {
+        node.prevSibling = prevSibling;
         node.nextSibling = this;
-        this.prevSibling = node;
-        if (this == parent.firstChild) {
+        if (parent.firstChild == this) {
             parent.firstChild = node;
         }
+        prevSibling = node;
+        node.root.root = root.root;
+    }
+
+    public Node getNextSibling() {
+        return nextSibling;
+    }
+
+    public void setNextSibling(Element element) {
+        setNextSibling(new Node(element));
+    }
+
+    public void setNextSibling(Node node) {
+        if (node.parent != null) {
+            throw new RuntimeException("不允许插入非根节点");
+        }
+        if (root == node.root) {
+            throw new RuntimeException("不允许插入同源节点");
+        }
+        if (parent == null) {
+            throw new RuntimeException("不允许插入根节点的兄弟节点");
+        }
         node.parent = parent;
-        return node;
+        node.prevSibling = this;
+        node.nextSibling = nextSibling;
+        if (parent.lastChild == this) {
+            parent.lastChild = node;
+        }
+        nextSibling = node;
+        node.root.root = root.root;
+    }
+
+    public Node getSibling(NodeFilter nodeFilter) {
+        return parent.getChild(nodeFilter);
+    }
+
+    public Node getOtherSibling(NodeFilter nodeFilter) {
+        return parent.getChild(new NodeFilter() {
+            @Override
+            public boolean acceptNode(Node node) {
+                return node != Node.this && nodeFilter.acceptNode(node);
+            }
+        });
+    }
+
+    public List<Node> getSiblings() {
+        return parent.getChildren();
+    }
+
+    public List<Node> getSiblings(NodeFilter nodeFilter) {
+        return parent.getChildren(nodeFilter);
+    }
+
+    public List<Node> getOtherSiblings() {
+        return parent.getChildren(new NodeFilter() {
+            @Override
+            public boolean acceptNode(Node node) {
+                return node != Node.this;
+            }
+        });
+    }
+
+    public List<Node> getOtherSiblings(NodeFilter nodeFilter) {
+        return parent.getChildren(new NodeFilter() {
+            @Override
+            public boolean acceptNode(Node node) {
+                return node != Node.this && nodeFilter.acceptNode(node);
+            }
+        });
     }
 
     public void delete() {
-        if (prevSibling != null) {
-            prevSibling.nextSibling = nextSibling;
-        }
-        if (nextSibling != null) {
-            nextSibling.prevSibling = prevSibling;
-        }
-        if (parent != null && this == parent.firstChild) {
-            parent.firstChild = nextSibling;
-        }
-        if (parent != null && this == parent.lastChild) {
-            parent.lastChild = prevSibling;
+        if (parent != null) {
+            if (parent.firstChild == this) {
+                parent.firstChild = nextSibling;
+            }
+            if (parent.lastChild == this) {
+                parent.lastChild = prevSibling;
+            }
+            if (prevSibling != null) {
+                prevSibling.nextSibling = nextSibling;
+            }
+            if (nextSibling != null) {
+                nextSibling.prevSibling = prevSibling;
+            }
+            prevSibling = nextSibling = parent = null;
+            root.root = this;
         }
     }
 
     public void act(NodeActor nodeActor) {
-        nodeActor.act(this);
-        nodeActor.postHandle(this);
-        nodeActor.afterComplete();
+        nodeActor.forward(this);
+        nodeActor.back(this);
+        nodeActor.complete(this);
+    }
+
+    public <T> T act(NodeGetter<T> nodeGetter) {
+        act((NodeActor) nodeGetter);
+        return nodeGetter.get(this);
+    }
+
+    public Node search(NodeIterator nodeIterator) {
+        return nodeIterator.next(this);
+    }
+
+    public Node search(NodeIterator nodeIterator, NodeFilter nodeFilter) {
+        Node node = this;
+        while (node != null) {
+            if (nodeFilter.acceptNode(node)) {
+                return node;
+            }
+            node = nodeIterator.next(node);
+        }
+        return null;
+    }
+
+    public void search(NodeIterator nodeIterator, NodeActor nodeActor) {
+        search(nodeIterator, new NodeFilter() {}, nodeActor);
+    }
+
+    public <T> T search(NodeIterator nodeIterator, NodeGetter<T> nodeGetter) {
+        search(nodeIterator, (NodeActor) nodeGetter);
+        return nodeGetter.get(this);
+    }
+
+    public void search(NodeIterator nodeIterator, NodeFilter nodeFilter, NodeActor nodeActor) {
+        Node node = this;
+        while (node != null) {
+            if (nodeFilter.acceptNode(node)) {
+                nodeActor.forward(node);
+                nodeActor.back(node);
+            }
+            node = nodeIterator.next(node);
+        }
+        nodeActor.complete(this);
+    }
+
+    public <T> T search(NodeIterator nodeIterator, NodeFilter nodeFilter, NodeGetter<T> nodeGetter) {
+        search(nodeIterator, nodeFilter, (NodeActor) nodeGetter);
+        return nodeGetter.get(this);
+    }
+
+    public Node search(NodeFilter nodeFilter) {
+        if (nodeFilter.acceptTree(this)) {
+            return search(this, nodeFilter);
+        }
+        return null;
     }
 
     public void search(NodeActor nodeActor) {
-        search(this, i -> true, nodeActor);
-        nodeActor.afterComplete();
+        search(this, new NodeFilter() {
+        }, nodeActor);
+        nodeActor.complete(this);
+    }
+
+    public <T> T search(NodeGetter<T> nodeGetter) {
+        search((NodeActor) nodeGetter);
+        return nodeGetter.get(this);
     }
 
     public void search(NodeFilter nodeFilter, NodeActor nodeActor) {
-        search(this, nodeFilter, nodeActor);
-        nodeActor.afterComplete();
+        if (nodeFilter.acceptTree(this)) {
+            search(this, nodeFilter, nodeActor);
+        }
+        nodeActor.complete(this);
     }
 
-    private void search(Node<?> node, NodeFilter nodeFilter, NodeActor nodeActor) {
-        if (nodeFilter.accept(node)) {
-            nodeActor.act(node);
-        }
-        for (Node<?> child : node.getChildren()) {
-            search(child, nodeFilter, nodeActor);
-        }
-        if (nodeFilter.accept(node)) {
-            nodeActor.postHandle(node);
-        }
+    public <T> T search(NodeFilter nodeFilter, NodeGetter<T> nodeGetter) {
+        search(nodeFilter, (NodeActor) nodeGetter);
+        return nodeGetter.get(this);
     }
 
-    public Node<?> search(NodeFilter nodeFilter) {
-        return search(this, nodeFilter);
-    }
-
-    private static Node<?> search(Node<?> node, NodeFilter nodeFilter) {
-        if (nodeFilter.accept(node)) {
+    private static Node search(Node node, NodeFilter nodeFilter) {
+        if (nodeFilter.acceptNode(node)) {
             return node;
         }
-        for (Node<?> child : node.getChildren()) {
-            return search(child, nodeFilter);
-        }
-        return null;
-    }
-
-    public Node<?> search(NodeSorter nodeSorter) {
-        Node<?> node = this;
-        while (node != null) {
-            int sort = nodeSorter.sort(node);
-            if (sort == 0) {
-                return node;
-            } else if (sort == 1) {
-                return null;
-            } else if (node.nextSibling == null || nodeSorter.sort(node.nextSibling) == 1) {
-                node = node.firstChild;
-            } else {
-                node = node.nextSibling;
-            }
-        }
-        return null;
-    }
-
-    public void addDeleteStatusNodes(boolean delete) {
-        for (Node<?> node : getChildren()) {
-            node.addDeleteStatusNodes(delete);
-        }
-        addDeleteStatusNode(delete);
-    }
-
-    public void addDeleteStatusNode(boolean delete) {
-        Node<String> result = new Node<>("删除");
-        result.insertAsFirstChild(delete ? new Node<>("是") : new Node<>("否"));
-        insertAsFirstChild(result);
-    }
-
-    public void addChecksumNodes(MessageDigest messageDigest) throws IOException {
-        for (Node<?> node : getChildren()) {
-            node.addChecksumNodes(messageDigest);
-        }
-        addChecksumNode(messageDigest);
-    }
-
-    public void addChecksumNode(MessageDigest messageDigest) throws IOException {
-        Node<String> result = new Node<>("SHA-256校验码");
-        if (element.getClass() == byte[].class) {
-            messageDigest.update((byte[]) element);
-        } else if (element.getClass() == String.class) {
-            messageDigest.update(toBytes((String) element));
-        } else if (element.getClass() == MemoryElement.class) {
-            MemoryElement memoryElement = (MemoryElement) element;
-            Visitor visitor = new Visitor(memoryElement.getFilename(), Visitor.Mode.R);
-            long length = memoryElement.getLength();
-            byte[] bytes = new byte[(int) Math.min(chunkSize, length)];
-            visitor.forward(memoryElement.getStart() - visitor.position());
-            while (length > 0) {
-                int n = (int) Math.min(chunkSize, length);
-                for (int i = 0; i < n; ++i) {
-                    bytes[i] = visitor.peek();
-                    visitor.forward();
+        for (Node child : node.getChildren()) {
+            if (nodeFilter.acceptTree(child)) {
+                Node searched = search(child, nodeFilter);
+                if (searched != null) {
+                    return searched;
                 }
-                length -= n;
-                messageDigest.update(bytes, 0, n);
             }
-            visitor.close();
-        } else {
-            throw new RuntimeException();
         }
-        for (Node<?> child : getChildren()) {
-            Node<?> childCheckSum = child.getFirstChild().getFirstChild();
-            messageDigest.update((byte[]) childCheckSum.element);
-        }
-        result.insertAsFirstChild(new Node<>(messageDigest.digest()));
-        insertAsFirstChild(result);
+        return null;
     }
 
-    public void save(String filename) throws IOException {
-        File file = new File(filename);
-        if (!file.getParentFile().exists() && !file.getParentFile().mkdirs()) {
-            throw new RuntimeException();
+    private static void search(Node node, NodeFilter nodeFilter, NodeActor nodeActor) {
+        boolean accept = nodeFilter.acceptNode(node);
+        if (accept) {
+            nodeActor.forward(node);
         }
-        try (
-                FileOutputStream fileOutputStream = new FileOutputStream(filename);
-                ObjectOutputStream objectOutputStream = new ObjectOutputStream(fileOutputStream)
-        ) {
-            objectOutputStream.writeObject(this);
+        for (Node child : node.getChildren()) {
+            if (nodeFilter.acceptTree(child)) {
+                search(child, nodeFilter, nodeActor);
+            }
         }
-    }
-
-    public static Node<?> load(String filename) throws IOException, ClassNotFoundException {
-        try (
-                FileInputStream fileInputStream = new FileInputStream(filename);
-                ObjectInputStream objectInputStream = new ObjectInputStream(fileInputStream)
-        ) {
-            return (Node<?>) objectInputStream.readObject();
+        if (accept) {
+            nodeActor.back(node);
         }
-    }
-
-    @Override
-    public String toString() {
-        return element.toString();
     }
 
 }

@@ -1,89 +1,106 @@
 package memory.node.actor;
 
 import memory.node.Node;
-import memory.util.FileProperty;
+import memory.node.getter.*;
+import memory.util.Utils;
 import memory.visitor.Visitor;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 
-import static memory.util.FileUtils.walkFile;
-
 public class FileCheckActor implements NodeActor {
+
+    private final TypeGetter typeGetter = new TypeGetter();
+
+    private final NameGetter nameGetter = new NameGetter();
+
+    private static final FileCreatedTimeGetter fileCreatedTimeGetter = new FileCreatedTimeGetter();
+
+    private static final FileModifiedTimeGetter fileModifiedTimeGetter = new FileModifiedTimeGetter();
+
+    private static final FileIsReadOnlyGetter fileIsReadOnlyGetter = new FileIsReadOnlyGetter();
+
+    private static final FileIsHiddenGetter fileIsHiddenGetter = new FileIsHiddenGetter();
+
+    private static final LengthGetter lengthGetter = new LengthGetter();
+
+    private static final ContentStartGetter contentStartGetter = new ContentStartGetter();
+
+    protected final Visitor memoryReader;
+
+    protected final Visitor fileReader;
 
     private final String baseName;
 
-    private int rootIndex;
-
-    private final Set<String> checkedFiles;
+    private final boolean isCheckTime;
 
     private final Set<String> expectedFiles;
 
-    public FileCheckActor(String baseName) throws IOException {
-        this.baseName = new File(baseName).getCanonicalPath();
-        this.rootIndex = 0;
-        this.expectedFiles = walkFile(baseName);
+    private final Set<String> checkedFiles;
+
+    public FileCheckActor(File memoryFile, Visitor memoryReader, Visitor fileReader, File baseDir, boolean isCheckTime) throws IOException {
+        this.memoryReader = memoryReader;
+        this.memoryReader.setFile(memoryFile);
+        this.fileReader = fileReader;
+        this.baseName = baseDir.getCanonicalPath();
+        this.isCheckTime = isCheckTime;
+        this.expectedFiles = Utils.walkDir(baseDir);
         this.checkedFiles = new HashSet<>();
     }
 
     @Override
-    public void act(Node<?> node) {
-        FileProperty fileProperty = FileProperty.from(node);
-        if (fileProperty == null) {
+    public void forward(Node node) {
+        String fileType = node.act(typeGetter);
+        if (fileType == null) {
             return;
         }
-        StringBuilder stringBuilder = new StringBuilder(fileProperty.name);
-        Node<?> parent = node.getParent();
+        StringBuilder stringBuilder = new StringBuilder(node.act(nameGetter));
+        Node parent = node.getParent();
         while (parent != null) {
-            FileProperty parentFileProperty = FileProperty.from(parent);
-            if (parentFileProperty != null) {
-                stringBuilder.insert(0, parentFileProperty.name + File.separator);
-            } else {
-                break;
+            String parentFileType = node.act(typeGetter);
+            if (parentFileType == null) {
+                continue;
             }
+            stringBuilder.insert(0, parent.act(nameGetter) + File.separator);
             parent = parent.getParent();
         }
         String realFilename = getRealFilename(stringBuilder.toString());
         File file = new File(realFilename);
         try {
-            check(fileProperty, new FileProperty(file));
-        } catch (IOException e) {
-            throw new RuntimeException();
-        }
-        if (fileProperty.type.equals("文件") && fileProperty.length != 0) {
-            try {
-                Visitor visitor = new Visitor(realFilename, Visitor.Mode.R);
-                Visitor elementVisitor = new Visitor(fileProperty.content.getElement().getFilename(), Visitor.Mode.R);
-                elementVisitor.forward(fileProperty.content.getElement().getStart());
-                for (long i = 0; i < fileProperty.content.getElement().getLength(); ++i) {
-                    if (visitor.peek() != elementVisitor.peek()) {
+            checkAttributes(node, file);
+            if (fileType.equals("文件") && node.act(lengthGetter) != 0) {
+                long start = node.act(contentStartGetter);
+                memoryReader.forward(start - memoryReader.getPosition());
+                fileReader.setFile(file);
+                for (long i = 0; i < fileReader.getLength(); ++i) {
+                    if (memoryReader.peek() != fileReader.peek()) {
                         throw new RuntimeException();
                     }
-                    visitor.forward();
-                    elementVisitor.forward();
+                    memoryReader.forward();
+                    fileReader.forward();
                 }
-                visitor.close();
-                elementVisitor.close();
-            } catch (IOException e) {
-                throw new RuntimeException();
             }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
         checkedFiles.add(realFilename);
     }
 
     @Override
-    public void afterComplete() {
+    public void complete(Node node) {
         if (!expectedFiles.equals(checkedFiles)) {
             throw new RuntimeException();
         }
     }
 
     private String getRealFilename(String logicalFilename) {
+        int rootIndex = 0;
         if (!logicalFilename.contains(File.separator)) {
-            rootIndex = 0;
             while (checkedFiles.contains(baseName + File.separator + (rootIndex == 0 ? "" : rootIndex + "_") + logicalFilename)) {
                 ++rootIndex;
             }
@@ -92,18 +109,27 @@ public class FileCheckActor implements NodeActor {
     }
 
 
-    private void check(FileProperty fileProperty1, FileProperty fileProperty2) {
-        if (!Objects.equals(fileProperty1.type, fileProperty2.type)) {
+    private void checkAttributes(Node node, File file) throws IOException {
+        BasicFileAttributes attributes = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+        if (!Objects.equals(node.act(typeGetter), Utils.getFileType(attributes))) {
             throw new RuntimeException();
         }
-        if (!Objects.equals(fileProperty1.readOnly, fileProperty2.readOnly)) {
+        if (!Objects.equals(node.act(fileIsReadOnlyGetter), Utils.isFileReadOnly(file))) {
             throw new RuntimeException();
         }
-        if (!Objects.equals(fileProperty1.hidden, fileProperty2.hidden)) {
+        if (!Objects.equals(node.act(fileIsHiddenGetter), Utils.isFileHidden(file))) {
             throw new RuntimeException();
         }
-        if (!Objects.equals(fileProperty1.length, fileProperty2.length)) {
+        if (!Objects.equals(node.act(lengthGetter), Utils.getFileLength(attributes))) {
             throw new RuntimeException();
+        }
+        if (isCheckTime) {
+            if (!Objects.equals(node.act(fileCreatedTimeGetter), Utils.getFileCreatedTime(attributes))) {
+                throw new RuntimeException();
+            }
+            if (!Objects.equals(node.act(fileModifiedTimeGetter), Utils.getFileModifiedTime(attributes))) {
+                throw new RuntimeException();
+            }
         }
     }
 
